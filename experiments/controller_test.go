@@ -31,6 +31,7 @@ import (
 	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/argoproj/argo-rollouts/pkg/client/clientset/versioned/fake"
 	informers "github.com/argoproj/argo-rollouts/pkg/client/informers/externalversions"
+	"github.com/argoproj/argo-rollouts/utils/conditions"
 )
 
 var (
@@ -138,6 +139,41 @@ func newExperiment(name string, templates []v1alpha1.TemplateSpec, duration int3
 	return ex
 }
 
+func newCondition(reason string, experiment *v1alpha1.Experiment) *v1alpha1.ExperimentCondition {
+	if reason == conditions.ReplicaSetUpdatedReason {
+		return &v1alpha1.ExperimentCondition{
+			Type:               v1alpha1.ExperimentProgressing,
+			Status:             corev1.ConditionTrue,
+			LastUpdateTime:     metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+			Reason:             reason,
+			Message:            fmt.Sprintf(conditions.ExperimentProgressingMessage, experiment.Name),
+		}
+	}
+	if reason == conditions.ExperimentCompleteReason {
+		return &v1alpha1.ExperimentCondition{
+			Type:               v1alpha1.ExperimentProgressing,
+			Status:             corev1.ConditionFalse,
+			LastUpdateTime:     metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+			Reason:             reason,
+			Message:            fmt.Sprintf(conditions.ExperimentCompletedMessage, experiment.Name),
+		}
+	}
+	if reason == conditions.ReplicaSetUpdatedReason {
+		return &v1alpha1.ExperimentCondition{
+			Type:               v1alpha1.ExperimentProgressing,
+			Status:             corev1.ConditionFalse,
+			LastUpdateTime:     metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+			Reason:             reason,
+			Message:            fmt.Sprintf(conditions.ExperimentRunningMessage, experiment.Name),
+		}
+	}
+
+	return nil
+}
+
 func templateToRS(ex *v1alpha1.Experiment, template v1alpha1.TemplateSpec, availableReplicas int32) *appsv1.ReplicaSet {
 	newRSTemplate := *template.Template.DeepCopy()
 	podHash := controller.ComputeHash(&newRSTemplate, nil)
@@ -173,15 +209,22 @@ func generateRSName(ex *v1alpha1.Experiment, template v1alpha1.TemplateSpec) str
 	return fmt.Sprintf("%s-%s-%s", ex.Name, template.Name, controller.ComputeHash(&template.Template, nil))
 }
 
-func calculatePatch(ex *v1alpha1.Experiment, patch string, templates []v1alpha1.TemplateStatus) string {
+func calculatePatch(ex *v1alpha1.Experiment, patch string, templates []v1alpha1.TemplateStatus, condition *v1alpha1.ExperimentCondition) string {
 	patchMap := make(map[string]interface{})
 	err := json.Unmarshal([]byte(patch), &patchMap)
 	if err != nil {
 		panic(err)
 	}
 	newStatus := patchMap["status"].(map[string]interface{})
-	newStatus["templateStatuses"] = templates
-	patchMap["status"] = newStatus
+	if templates != nil {
+		newStatus["templateStatuses"] = templates
+		patchMap["status"] = newStatus
+	}
+	if condition != nil {
+		newStatus["conditions"] = []v1alpha1.ExperimentCondition{*condition}
+		patchMap["status"] = newStatus
+	}
+
 	patchBytes, err := json.Marshal(patchMap)
 	if err != nil {
 		panic(err)

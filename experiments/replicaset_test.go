@@ -8,6 +8,7 @@ import (
 	"k8s.io/utils/pointer"
 
 	"github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
+	"github.com/argoproj/argo-rollouts/utils/conditions"
 )
 
 func TestCreateMultipleRS(t *testing.T) {
@@ -37,11 +38,12 @@ func TestCreateMultipleRS(t *testing.T) {
 		generateTemplatesStatus("bar", 0, 0),
 		generateTemplatesStatus("baz", 0, 0),
 	}
+	cond := newCondition(conditions.ReplicaSetUpdatedReason, e)
 
 	expectedPatch := calculatePatch(e, `{
 		"status":{
 		}
-	}`, templateStatus)
+	}`, templateStatus, cond)
 	assert.Equal(t, expectedPatch, patch)
 }
 
@@ -71,11 +73,12 @@ func TestCreateMissingRS(t *testing.T) {
 
 	patch := f.getPatchedExperiment(patchIndex)
 	expectedPatch := `{"status":{}}`
+	cond := newCondition(conditions.ReplicaSetUpdatedReason, e)
 	templateStatuses := []v1alpha1.TemplateStatus{
 		generateTemplatesStatus("bar", 0, 0),
 		generateTemplatesStatus("baz", 0, 0),
 	}
-	assert.Equal(t, calculatePatch(e, expectedPatch, templateStatuses), patch)
+	assert.Equal(t, calculatePatch(e, expectedPatch, templateStatuses, cond), patch)
 }
 
 func TestFailCreateRSWithInvalidSelector(t *testing.T) {
@@ -137,9 +140,11 @@ func TestAdoptRS(t *testing.T) {
 		generateTemplatesStatus("bar", 0, 0),
 	}
 
+	cond := newCondition(conditions.ReplicaSetUpdatedReason, e)
+
 	expectedPatch := calculatePatch(e, `{
 		"status":{
 		}
-	}`, templateStatus)
+	}`, templateStatus, cond)
 	assert.Equal(t, expectedPatch, patch)
 }

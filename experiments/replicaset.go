@@ -80,18 +80,18 @@ func (c *ExperimentController) getReplicaSetsForExperiment(experiment *v1alpha1.
 	return templateToRS, nil
 }
 
-func (ec *ExperimentController) reconcileReplicaSet(experiment *v1alpha1.Experiment, template v1alpha1.TemplateSpec) (*appsv1.ReplicaSet, error) {
+func (ec *ExperimentController) reconcileReplicaSet(experiment *v1alpha1.Experiment, template v1alpha1.TemplateSpec, templateStatus v1alpha1.TemplateStatus) (*appsv1.ReplicaSet, error) {
 	logCtx := log.WithExperiment(experiment)
 	newRSTemplate := *template.Template.DeepCopy()
 
-	podTemplateSpecHash := controller.ComputeHash(&newRSTemplate, experimentutil.GetCollisionCountForTemplate(experiment, template))
+	podTemplateSpecHash := controller.ComputeHash(&newRSTemplate, templateStatus.CollisionCount)
 	newRSTemplate.Labels = labelsutil.CloneAndAddLabel(template.Template.Labels, v1alpha1.DefaultRolloutUniqueLabelKey, podTemplateSpecHash)
 	//Add podTemplateHash label to selector.
 	newRSSelector := labelsutil.CloneSelectorAndAddLabel(template.Selector, v1alpha1.DefaultRolloutUniqueLabelKey, podTemplateSpecHash)
 
 	newRS := appsv1.ReplicaSet{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            experimentutil.ReplicasetNameFromExperiment(experiment, template),
+			Name:            fmt.Sprintf("%s-%s-%s", experiment.Name, template.Name, podTemplateSpecHash),
 			Namespace:       experiment.Namespace,
 			OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(experiment, controllerKind)},
 			Labels:          newRSTemplate.Labels,
@@ -134,31 +134,32 @@ func (ec *ExperimentController) reconcileReplicaSet(experiment *v1alpha1.Experim
 			break
 		}
 
-		templateStatusPtr, statusIndex := experimentutil.GetTemplateStatus(experiment, template)
-		templateStatus := v1alpha1.TemplateStatus{
-			Name: template.Name,
-		}
-		if templateStatusPtr != nil {
-			templateStatus = *templateStatusPtr
+		newTemplate := v1alpha1.TemplateStatus{}
+		index := len(experiment.Status.TemplateStatuses)
+		for i := range experiment.Status.TemplateStatuses {
+			ts := experiment.Status.TemplateStatuses[i]
+			if template.Name == ts.Name {
+				index = i
+				newTemplate = ts
+				break
+			}
 		}
 
 		// Matching ReplicaSet is not equal - increment the collisionCount in the RolloutStatus
 		// and requeue the Rollout.
-		if templateStatus.CollisionCount == nil {
-			templateStatus.CollisionCount = new(int32)
+		if newTemplate.CollisionCount == nil {
+			newTemplate.CollisionCount = new(int32)
 		}
-		preCollisionCount := *templateStatus.CollisionCount
-		*templateStatus.CollisionCount++
+		preCollisionCount := *newTemplate.CollisionCount
+		*newTemplate.CollisionCount++
 
 		statusCpy := experiment.Status.DeepCopy()
-		templateStatuses := statusCpy.TemplateStatuses
-		if statusIndex != nil {
-			templateStatuses[*statusIndex] = templateStatus
+		if index < len(experiment.Status.TemplateStatuses) {
+			statusCpy.TemplateStatuses[index] = newTemplate
 		} else {
-			templateStatuses = append(templateStatuses, templateStatus)
+			statusCpy.TemplateStatuses = append(statusCpy.TemplateStatuses, newTemplate)
 		}
-
-		templateStatusBytes, err := json.Marshal(templateStatuses)
+		templateStatusBytes, err := json.Marshal(statusCpy.TemplateStatuses)
 		if err != nil {
 			return nil, err
 		}
